@@ -46,20 +46,54 @@ Here's an example of what you can do when it's connected to Claude.
 
    After approximately 20 days, you will might need to re-authenticate.
 
-3. **Connect to the MCP server**
+3. **Start the MCP server**
 
-   Copy the below json with the appropriate {{PATH}} values:
+   The MCP server supports two modes:
+
+   - **HTTP mode (default)** — serves Streamable HTTP at `http://127.0.0.1:8000/mcp`, so multiple clients can connect to one shared server:
+
+     ```bash
+     cd whatsapp-mcp-server
+     uv run main.py
+     ```
+
+     Override the bind address/port/endpoint with environment variables (`FASTMCP_HOST`, `FASTMCP_PORT`, `FASTMCP_STREAMABLE_HTTP_PATH`), or pin defaults in [main.py](whatsapp-mcp-server/main.py).
+
+   - **stdio mode** — the original behavior, one server process per client (what Claude Desktop and most local clients expect):
+
+     ```bash
+     cd whatsapp-mcp-server
+     MCP_TRANSPORT=stdio uv run main.py
+     ```
+
+4. **Connect your client**
+
+   **HTTP mode** — use a URL entry (supported by Cursor and other Streamable HTTP-capable clients):
 
    ```json
    {
      "mcpServers": {
        "whatsapp": {
+         "url": "http://127.0.0.1:8000/mcp"
+       }
+     }
+   }
+   ```
+
+   **stdio mode** — copy the below json with the appropriate {{PATH}} values:
+
+   ```json
+   {
+     "mcpServers": {
+       "server-name": {
          "command": "{{PATH_TO_UV}}", // Run `which uv` and place the output here
          "args": [
            "--directory",
            "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-mcp-server", // cd into the repo, run `pwd` and enter the output here + "/whatsapp-mcp-server"
            "run",
-           "main.py"
+           "main.py",
+           "--transport",
+           "stdio"
          ]
        }
      }
@@ -78,7 +112,7 @@ Here's an example of what you can do when it's connected to Claude.
    ~/.cursor/mcp.json
    ```
 
-4. **Restart Claude Desktop / Cursor**
+5. **Restart Claude Desktop / Cursor**
 
    Open Claude Desktop and you should now see WhatsApp as an available integration.
 

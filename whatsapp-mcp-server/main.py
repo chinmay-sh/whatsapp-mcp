@@ -16,7 +16,14 @@ from whatsapp import (
 )
 
 # Initialize FastMCP server
-mcp = FastMCP("whatsapp")
+# host/port/endpoint can also be overridden via FASTMCP_HOST / FASTMCP_PORT /
+# FASTMCP_STREAMABLE_HTTP_PATH environment variables.
+mcp = FastMCP(
+    "whatsapp",
+    host="0.0.0.0",
+    port=8000,
+    streamable_http_path="/mcp",
+)
 
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
@@ -247,5 +254,20 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
         }
 
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    import os
+    import sys
+
+    # Transport can be set via --transport flag or MCP_TRANSPORT env var.
+    args = sys.argv[1:]
+    if "--transport" in args:
+        transport = args[args.index("--transport") + 1]
+    else:
+        transport = os.environ.get("MCP_TRANSPORT", "streamable-http")
+
+    if transport == "stdio":
+        # Original stdio mode (e.g. for Claude Desktop / local clients)
+        mcp.run(transport="stdio")
+    else:
+        # HTTP mode: serves Streamable HTTP at http://{host}:{port}{streamable_http_path}
+        print(f"WhatsApp MCP server listening on http://{mcp.settings.host}:{mcp.settings.port}{mcp.settings.streamable_http_path}", flush=True)
+        mcp.run(transport="streamable-http")
