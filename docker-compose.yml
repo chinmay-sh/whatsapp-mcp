@@ -1,0 +1,32 @@
+services:
+  whatsapp-bridge:
+    build: ./whatsapp-bridge
+    container_name: whatsapp-bridge
+    restart: unless-stopped
+    # Session database, message history and downloaded media live in this
+    # volume; the MCP server mounts it at the identical path so media file
+    # paths exchanged over the REST API resolve in both containers.
+    volumes:
+      - whatsapp-store:/app/store
+    expose:
+      - "8080"
+
+  whatsapp-mcp-server:
+    build: ./whatsapp-mcp-server
+    container_name: whatsapp-mcp-server
+    restart: unless-stopped
+    depends_on:
+      - whatsapp-bridge
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+      MCP_PATH: /mcp
+      MESSAGES_DB_PATH: /app/store/messages.db
+      WHATSAPP_API_BASE_URL: http://whatsapp-bridge:8080/api
+    ports:
+      - "8000:8000"
+    volumes:
+      - whatsapp-store:/app/store
+
+volumes:
+  whatsapp-store:

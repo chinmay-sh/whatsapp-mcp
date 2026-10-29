@@ -16,7 +16,96 @@ Here's an example of what you can do when it's connected to Claude.
 
 ## Installation
 
-### Prerequisites
+### Option A: Docker Compose (recommended)
+
+Runs both the WhatsApp bridge and the MCP server as containers with one command — no Go, Python or FFmpeg setup needed.
+
+1. **Clone this repository**
+
+   ```bash
+   git clone https://github.com/lharries/whatsapp-mcp.git
+   cd whatsapp-mcp
+   ```
+
+2. **Start the stack**
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. **Authenticate WhatsApp**
+
+   The bridge prints a QR code on first start. Display it with:
+
+   ```bash
+   docker compose logs -f whatsapp-bridge
+   ```
+
+   Scan the QR code with your WhatsApp mobile app (Settings → Linked Devices → Link a Device). The session and message database persist in the `whatsapp-store` Docker volume, so you only scan once.
+
+4. **Connect your MCP client**
+
+   Point any Streamable HTTP-capable client at the URL entry:
+
+   ```json
+   {
+     "mcpServers": {
+       "whatsapp": {
+         "url": "http://localhost:8000/mcp"
+       }
+     }
+   }
+   ```
+
+Notes:
+
+- The MCP server listens on `0.0.0.0:8000` inside the container (host port configurable under `ports` in [docker-compose.yml](docker-compose.yml)).
+- Both containers mount the same `whatsapp-store` volume at `/app/store` — the server reads the bridge's SQLite DB directly and exchanged media paths resolve in both containers. This means `send_file`/`send_audio_message` media paths must reference files inside that volume (e.g. `/app/store/...`); host-local paths are not visible to the containers. To send media from your host, mount it into the server container first.
+- Useful commands: `docker compose logs -f` (logs), `docker compose restart` (restart), `docker compose down` (stop).
+
+#### Docker configuration reference
+
+Environment variables understood by the `whatsapp-mcp-server` container (set them under `environment` in [docker-compose.yml](docker-compose.yml)):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MCP_HOST` | `0.0.0.0` | Bind address of the MCP server (keep `0.0.0.0` in Docker) |
+| `MCP_PORT` | `8000` | Port the MCP server listens on inside the container |
+| `MCP_PATH` | `/mcp` | HTTP path serving the MCP endpoint |
+| `MESSAGES_DB_PATH` | `/app/store/messages.db` | Path to the bridge's SQLite message DB |
+| `WHATSAPP_API_BASE_URL` | `http://whatsapp-bridge:8080/api` | Base URL of the bridge's REST API |
+
+The published host port is set under `ports` (default `"8000:8000"`). To serve MCP on a different host port, e.g. `9000`, change it to `"9000:8000"` and point your client at `http://localhost:9000/mcp`.
+
+#### Sending media from the host
+
+`send_file` and `send_audio_message` pass filesystem paths to the bridge, so the files must be visible inside the containers. Mount a host directory into the server container, e.g. add to `whatsapp-mcp-server` in [docker-compose.yml](docker-compose.yml):
+
+```yaml
+    volumes:
+      - whatsapp-store:/app/store
+      - ./media:/app/media
+```
+
+Then ask the agent to send `/app/media/photo.jpg`.
+
+#### Re-authenticating
+
+WhatsApp sessions expire after ~20 days. When that happens the bridge logs a new QR code — view it with `docker compose logs -f whatsapp-bridge` and scan it. If you want to start fresh (unlink the device and wipe all history), remove the volume:
+
+```bash
+docker compose down
+docker volume rm whatsapp-mcp_whatsapp-store
+docker compose up -d
+```
+
+#### Security
+
+The MCP endpoint has no authentication. Only publish the port (`ports`) on trusted networks; if you don't need host access, remove the `ports` entry and reach the server via another container on the same Docker network, or put it behind an authenticating reverse proxy.
+
+### Option B: Local setup
+
+#### Prerequisites
 
 - Go
 - Python 3.6+
@@ -24,7 +113,7 @@ Here's an example of what you can do when it's connected to Claude.
 - UV (Python package manager), install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - FFmpeg (_optional_) - Only needed for audio messages. If you want to send audio files as playable WhatsApp voice messages, they must be in `.ogg` Opus format. With FFmpeg installed, the MCP server will automatically convert non-Opus audio files. Without FFmpeg, you can still send raw audio files using the `send_file` tool.
 
-### Steps
+#### Steps
 
 1. **Clone this repository**
 
@@ -57,7 +146,7 @@ Here's an example of what you can do when it's connected to Claude.
      uv run main.py
      ```
 
-     Override the bind address/port/endpoint with environment variables (`FASTMCP_HOST`, `FASTMCP_PORT`, `FASTMCP_STREAMABLE_HTTP_PATH`), or pin defaults in [main.py](whatsapp-mcp-server/main.py).
+     Override the bind address/port/endpoint with environment variables (`MCP_HOST`, `MCP_PORT`, `MCP_PATH`), or pin defaults in [main.py](whatsapp-mcp-server/main.py).
 
    - **stdio mode** — the original behavior, one server process per client (what Claude Desktop and most local clients expect):
 
@@ -121,6 +210,8 @@ Here's an example of what you can do when it's connected to Claude.
 ### Windows Compatibility
 
 If you're running this project on Windows, be aware that `go-sqlite3` requires **CGO to be enabled** in order to compile and work properly. By default, **CGO is disabled on Windows**, so you need to explicitly enable it and have a C compiler installed.
+
+> **Tip:** The [Docker Compose](#option-a-docker-compose-recommended) setup avoids this entirely — the bridge builds inside a Linux container with CGO already configured.
 
 #### Steps to get it working:
 
@@ -205,6 +296,13 @@ By default, just the metadata of the media is stored in the local database. The 
 
 - If you encounter permission issues when running uv, you may need to add it to your PATH or use the full path to the executable.
 - Make sure both the Go application and the Python server are running for the integration to work properly.
+
+### Docker
+
+- **Bridge keeps restarting / no QR code**: check `docker compose logs whatsapp-bridge`. The bridge only starts its REST API after WhatsApp authentication succeeds; the MCP server works independently of it.
+- **`client outdated (405)` in bridge logs**: your image was built from an old pinned `whatsmeow` version. Rebuild with `docker compose build --no-cache whatsapp-bridge` after pulling the latest repo.
+- **MCP connection refused**: verify the stack is up with `docker compose ps` and that the host port mapping (default `8000:8000`) doesn't clash with another service.
+- **Tools work but sends fail**: the server can't reach the bridge. Confirm `WHATSAPP_API_BASE_URL` points at `http://whatsapp-bridge:8080/api` and the bridge container is running and authenticated.
 
 ### Authentication Issues
 

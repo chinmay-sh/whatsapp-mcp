@@ -1,4 +1,5 @@
 from typing import List, Dict, Any, Optional
+import os
 from mcp.server.fastmcp import FastMCP
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
@@ -16,13 +17,13 @@ from whatsapp import (
 )
 
 # Initialize FastMCP server
-# host/port/endpoint can also be overridden via FASTMCP_HOST / FASTMCP_PORT /
-# FASTMCP_STREAMABLE_HTTP_PATH environment variables.
+# Bind address/port/endpoint are configurable via MCP_HOST / MCP_PORT / MCP_PATH
+# env vars (docker-compose sets these; defaults suit direct local runs).
 mcp = FastMCP(
     "whatsapp",
-    host="0.0.0.0",
-    port=8000,
-    streamable_http_path="/mcp",
+    host=os.environ.get("MCP_HOST", "0.0.0.0"),
+    port=int(os.environ.get("MCP_PORT", "8000")),
+    streamable_http_path=os.environ.get("MCP_PATH", "/mcp"),
 )
 
 @mcp.tool()
@@ -254,7 +255,6 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
         }
 
 if __name__ == "__main__":
-    import os
     import sys
 
     # Transport can be set via --transport flag or MCP_TRANSPORT env var.
