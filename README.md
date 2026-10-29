@@ -27,7 +27,9 @@ Runs both the WhatsApp bridge and the MCP server as containers with one command 
    cd whatsapp-mcp
    ```
 
-2. **Start the stack**
+2. **Configure and start the stack**
+
+   Copy `.env.example` to `.env` and set `MCP_API_KEY` (and the Cloudflare values if you want remote access, see [Remote access via Cloudflare Tunnel](#remote-access-via-cloudflare-tunnel)). Then:
 
    ```bash
    docker compose up -d --build
@@ -51,7 +53,8 @@ Runs both the WhatsApp bridge and the MCP server as containers with one command 
    {
      "mcpServers": {
        "whatsapp": {
-         "url": "http://localhost:8000/mcp"
+         "url": "http://localhost:8000/mcp",
+         "headers": { "Authorization": "Bearer <your MCP_API_KEY>" }
        }
      }
    }
@@ -60,7 +63,7 @@ Runs both the WhatsApp bridge and the MCP server as containers with one command 
 Notes:
 
 - The MCP server listens on `0.0.0.0:8000` inside the container (host port configurable under `ports` in [docker-compose.yml](docker-compose.yml)).
-- Both containers mount the same `whatsapp-store` volume at `/app/store` — the server reads the bridge's SQLite DB directly and exchanged media paths resolve in both containers. This means `send_file`/`send_audio_message` media paths must reference files inside that volume (e.g. `/app/store/...`); host-local paths are not visible to the containers. To send media from your host, mount it into the server container first.
+- Both containers mount the same `whatsapp-store` volume at `/app/store` — the server reads the bridge's SQLite DB directly and exchanged media paths resolve in both containers. To send media from your host, see [Sending media from the host](#sending-media-from-the-host).
 - Useful commands: `docker compose logs -f` (logs), `docker compose restart` (restart), `docker compose down` (stop).
 
 #### Docker configuration reference
@@ -74,20 +77,24 @@ Environment variables understood by the `whatsapp-mcp-server` container (set the
 | `MCP_PATH` | `/mcp` | HTTP path serving the MCP endpoint |
 | `MESSAGES_DB_PATH` | `/app/store/messages.db` | Path to the bridge's SQLite message DB |
 | `WHATSAPP_API_BASE_URL` | `http://whatsapp-bridge:8080/api` | Base URL of the bridge's REST API |
+| `MCP_API_KEY` | from `.env` (required) | Clients must send `Authorization: Bearer <key>`; unset = no auth (local runs only) |
+| `MCP_PUBLIC_HOST` | from `.env` | Public tunnel hostname allowed in the `Host` header (localhost is always allowed) |
 
 The published host port is set under `ports` (default `"8000:8000"`). To serve MCP on a different host port, e.g. `9000`, change it to `"9000:8000"` and point your client at `http://localhost:9000/mcp`.
 
 #### Sending media from the host
 
-`send_file` and `send_audio_message` pass filesystem paths to the bridge, so the files must be visible inside the containers. Mount a host directory into the server container, e.g. add to `whatsapp-mcp-server` in [docker-compose.yml](docker-compose.yml):
+The `outbox/` folder next to [docker-compose.yml](docker-compose.yml) is mounted at `/app/store/outbox` in both containers. Put a file there (e.g. `outbox/photo.jpg`) and ask the agent to send `/app/store/outbox/photo.jpg`. The bridge only sends files from subfolders of `/app/store` (the outbox and downloaded media), never the session database or anything else in the container.
 
-```yaml
-    volumes:
-      - whatsapp-store:/app/store
-      - ./media:/app/media
-```
+#### Remote access via Cloudflare Tunnel
 
-Then ask the agent to send `/app/media/photo.jpg`.
+The `cloudflared` service exposes the MCP server through a Cloudflare Tunnel; the API key is checked by the MCP server itself, so no Cloudflare Access policy is needed.
+
+1. In the Cloudflare dashboard go to Zero Trust → Networks → Tunnels, create a tunnel (Cloudflared connector) and copy its token into `CLOUDFLARE_TUNNEL_TOKEN` in `.env`.
+2. Add a public hostname (e.g. `whatsapp.example.com`) with service `http://whatsapp-mcp-server:8000`, and set `MCP_PUBLIC_HOST=whatsapp.example.com` in `.env`.
+3. `docker compose up -d`, then point clients at `https://whatsapp.example.com/mcp` with the same `Authorization: Bearer <key>` header.
+
+Clients must be able to send a custom `Authorization` header (Claude Code, MCP Router, Cursor, etc.). Claude.ai / Claude Desktop custom connectors only support OAuth, so they can't use this key.
 
 #### Re-authenticating
 
@@ -101,7 +108,7 @@ docker compose up -d
 
 #### Security
 
-The MCP endpoint has no authentication. Only publish the port (`ports`) on trusted networks; if you don't need host access, remove the `ports` entry and reach the server via another container on the same Docker network, or put it behind an authenticating reverse proxy.
+The MCP server gives full read/send access to your WhatsApp, so it requires `MCP_API_KEY` (bearer token). The host port is bound to `127.0.0.1` only, and requests whose `Host` header isn't localhost or `MCP_PUBLIC_HOST` are rejected (DNS-rebinding protection). Keep `.env` private; rotate the key by editing `.env` and running `docker compose up -d`.
 
 ### Option B: Local setup
 

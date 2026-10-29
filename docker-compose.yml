@@ -8,6 +8,8 @@ services:
     # paths exchanged over the REST API resolve in both containers.
     volumes:
       - whatsapp-store:/app/store
+      # Drop files here on the host to send them; mounted in both containers at the same path
+      - ./outbox:/app/store/outbox
     expose:
       - "8080"
 
@@ -23,10 +25,28 @@ services:
       MCP_PATH: /mcp
       MESSAGES_DB_PATH: /app/store/messages.db
       WHATSAPP_API_BASE_URL: http://whatsapp-bridge:8080/api
+      # Clients must send "Authorization: Bearer <key>"; required because the tunnel makes this public
+      MCP_API_KEY: ${MCP_API_KEY:?set MCP_API_KEY in .env}
+      # Public hostname routed to this server by the Cloudflare tunnel (Host header allow-list)
+      MCP_PUBLIC_HOST: ${MCP_PUBLIC_HOST:-}
     ports:
-      - "8000:8000"
+      # Loopback only: local clients connect directly, remote ones go through the tunnel
+      - "127.0.0.1:8000:8000"
     volumes:
       - whatsapp-store:/app/store
+      - ./outbox:/app/store/outbox
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: whatsapp-cloudflared
+    restart: unless-stopped
+    depends_on:
+      - whatsapp-mcp-server
+    # Tunnel and public hostname are configured in the Cloudflare dashboard;
+    # point the hostname's service at http://whatsapp-mcp-server:8000
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
 
 volumes:
   whatsapp-store:

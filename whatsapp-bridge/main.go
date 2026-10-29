@@ -233,8 +233,23 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 
 	// Check if we have media to send
 	if mediaPath != "" {
+		// Only send files from a subfolder of store/ (downloaded media, or e.g. store/outbox).
+		// Blocks the session/message DBs at store/ root and anything else on disk.
+		storeDir, _ := filepath.Abs("store")
+		realPath, err := filepath.EvalSymlinks(mediaPath)
+		if err == nil {
+			realPath, err = filepath.Abs(realPath)
+		}
+		if err != nil {
+			return false, fmt.Sprintf("Error resolving media path: %v", err)
+		}
+		rel, err := filepath.Rel(storeDir, realPath)
+		if err != nil || strings.HasPrefix(rel, "..") || !strings.ContainsRune(rel, filepath.Separator) {
+			return false, "Media path must be inside a subfolder of the store directory"
+		}
+
 		// Read media file
-		mediaData, err := os.ReadFile(mediaPath)
+		mediaData, err := os.ReadFile(realPath)
 		if err != nil {
 			return false, fmt.Sprintf("Error reading media file: %v", err)
 		}
@@ -588,6 +603,12 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	// Create directory for the chat if it doesn't exist
 	if err := os.MkdirAll(chatDir, 0755); err != nil {
 		return false, "", "", "", fmt.Errorf("failed to create chat directory: %v", err)
+	}
+
+	// filename comes from the sender's message; strip any path so "../whatsapp.db" can't escape chatDir
+	filename = filepath.Base(filename)
+	if filename == "." || filename == ".." || filename == string(filepath.Separator) {
+		filename = "media_" + messageID
 	}
 
 	// Generate a local path for the file

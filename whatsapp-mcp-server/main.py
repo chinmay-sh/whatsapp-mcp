@@ -1,6 +1,9 @@
 from typing import List, Dict, Any, Optional
 import os
+import hmac
 from mcp.server.fastmcp import FastMCP
+from starlette.responses import JSONResponse
+from mcp.server.transport_security import TransportSecuritySettings
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -16,6 +19,11 @@ from whatsapp import (
     download_media as whatsapp_download_media
 )
 
+# Optional bearer API key; required in docker-compose since the Cloudflare tunnel makes the server public
+API_KEY = os.environ.get("MCP_API_KEY")
+# Public hostname the Cloudflare tunnel forwards (it keeps the original Host header)
+PUBLIC_HOST = os.environ.get("MCP_PUBLIC_HOST")
+
 # Initialize FastMCP server
 # Bind address/port/endpoint are configurable via MCP_HOST / MCP_PORT / MCP_PATH
 # env vars (docker-compose sets these; defaults suit direct local runs).
@@ -24,9 +32,21 @@ mcp = FastMCP(
     host=os.environ.get("MCP_HOST", "0.0.0.0"),
     port=int(os.environ.get("MCP_PORT", "8000")),
     streamable_http_path=os.environ.get("MCP_PATH", "/mcp"),
+    # No server-side sessions: clients holding a session id from before a
+    # container restart (or past the idle timeout) would otherwise get 404.
+    stateless_http=True,
+    # Reject DNS-rebinding requests from web pages; only local Host headers pass.
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["localhost:*", "127.0.0.1:*"] + ([PUBLIC_HOST] if PUBLIC_HOST else []),
+        allowed_origins=["http://localhost:*", "http://127.0.0.1:*"],
+    ),
 )
 
-@mcp.tool()
+# structured_output=False: the return annotations below don't match what the
+# whatsapp.py helpers return (dataclasses, formatted strings), and output
+# schema validation in mcp>=1.10 would fail every call.
+@mcp.tool(structured_output=False)
 def search_contacts(query: str) -> List[Dict[str, Any]]:
     """Search WhatsApp contacts by name or phone number.
     
@@ -36,7 +56,7 @@ def search_contacts(query: str) -> List[Dict[str, Any]]:
     contacts = whatsapp_search_contacts(query)
     return contacts
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def list_messages(
     after: Optional[str] = None,
     before: Optional[str] = None,
@@ -77,7 +97,7 @@ def list_messages(
     )
     return messages
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def list_chats(
     query: Optional[str] = None,
     limit: int = 20,
@@ -103,7 +123,7 @@ def list_chats(
     )
     return chats
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]:
     """Get WhatsApp chat metadata by JID.
     
@@ -114,7 +134,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]
     chat = whatsapp_get_chat(chat_jid, include_last_message)
     return chat
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
     """Get WhatsApp chat metadata by sender phone number.
     
@@ -124,7 +144,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
     chat = whatsapp_get_direct_chat_by_contact(sender_phone_number)
     return chat
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str, Any]]:
     """Get all WhatsApp chats involving the contact.
     
@@ -136,7 +156,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str
     chats = whatsapp_get_contact_chats(jid, limit, page)
     return chats
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_last_interaction(jid: str) -> str:
     """Get most recent WhatsApp message involving the contact.
     
@@ -146,7 +166,7 @@ def get_last_interaction(jid: str) -> str:
     message = whatsapp_get_last_interaction(jid)
     return message
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_message_context(
     message_id: str,
     before: int = 5,
@@ -162,7 +182,7 @@ def get_message_context(
     context = whatsapp_get_message_context(message_id, before, after)
     return context
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def send_message(
     recipient: str,
     message: str
@@ -191,14 +211,15 @@ def send_message(
         "message": status_message
     }
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
     """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
     
     Args:
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
-        media_path: The absolute path to the media file to send (image, video, document)
+        media_path: The absolute path to the media file to send (image, video, document); must be
+                 under /app/store/outbox (the host's outbox folder) or a downloaded media path
     
     Returns:
         A dictionary containing success status and a status message
@@ -211,14 +232,15 @@ def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
         "message": status_message
     }
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
     """Send any audio file as a WhatsApp audio message to the specified recipient. For group messages use the JID. If it errors due to ffmpeg not being installed, use send_file instead.
     
     Args:
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
-        media_path: The absolute path to the audio file to send (will be converted to Opus .ogg if it's not a .ogg file)
+        media_path: The absolute path to the audio file to send (will be converted to Opus .ogg if it's not a .ogg file);
+                 must be under /app/store/outbox (the host's outbox folder) or a downloaded media path
     
     Returns:
         A dictionary containing success status and a status message
@@ -229,7 +251,7 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
         "message": status_message
     }
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
     """Download media from a WhatsApp message and get the local file path.
     
@@ -254,6 +276,20 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "message": "Failed to download media"
         }
 
+def require_api_key(app):
+    """ASGI wrapper: reject HTTP requests without "Authorization: Bearer <MCP_API_KEY>"."""
+    expected = f"Bearer {API_KEY}".encode()
+
+    async def guarded(scope, receive, send):
+        if scope["type"] == "http":
+            auth = dict(scope["headers"]).get(b"authorization", b"")
+            if not hmac.compare_digest(auth, expected):
+                await JSONResponse({"error": "invalid or missing API key"}, status_code=401)(scope, receive, send)
+                return
+        await app(scope, receive, send)  # lifespan events pass through untouched
+
+    return guarded
+
 if __name__ == "__main__":
     import sys
 
@@ -269,5 +305,9 @@ if __name__ == "__main__":
         mcp.run(transport="stdio")
     else:
         # HTTP mode: serves Streamable HTTP at http://{host}:{port}{streamable_http_path}
-        print(f"WhatsApp MCP server listening on http://{mcp.settings.host}:{mcp.settings.port}{mcp.settings.streamable_http_path}", flush=True)
-        mcp.run(transport="streamable-http")
+        import uvicorn
+        app = mcp.streamable_http_app()
+        if API_KEY:
+            app = require_api_key(app)
+        print(f"WhatsApp MCP server listening on http://{mcp.settings.host}:{mcp.settings.port}{mcp.settings.streamable_http_path} (API key {'required' if API_KEY else 'NOT set'})", flush=True)
+        uvicorn.run(app, host=mcp.settings.host, port=mcp.settings.port)

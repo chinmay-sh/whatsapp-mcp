@@ -343,14 +343,14 @@ def list_chats(
             FROM chats
         """]
         
-        if include_last_message:
-            query_parts.append("""
-                LEFT JOIN messages ON chats.jid = messages.chat_jid 
-                AND chats.last_message_time = messages.timestamp
-            """)
-            
+        # Always join (the SELECT references messages.*); the flag just makes the join match nothing
+        query_parts.append("""
+            LEFT JOIN messages ON chats.jid = messages.chat_jid
+            AND chats.last_message_time = messages.timestamp AND ?
+        """)
+
         where_clauses = []
-        params = []
+        params = [include_last_message]
         
         if query:
             where_clauses.append("(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")
@@ -552,15 +552,15 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
             FROM chats c
         """
         
-        if include_last_message:
-            query += """
-                LEFT JOIN messages m ON c.jid = m.chat_jid 
-                AND c.last_message_time = m.timestamp
-            """
-            
+        # Always join (the SELECT references m.*); the flag just makes the join match nothing
+        query += """
+            LEFT JOIN messages m ON c.jid = m.chat_jid
+            AND c.last_message_time = m.timestamp AND ?
+        """
+
         query += " WHERE c.jid = ?"
-        
-        cursor.execute(query, (chat_jid,))
+
+        cursor.execute(query, (include_last_message, chat_jid))
         chat_data = cursor.fetchone()
         
         if not chat_data:

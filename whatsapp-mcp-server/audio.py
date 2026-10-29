@@ -78,7 +78,8 @@ def convert_to_opus_ogg_temp(input_file, bitrate="32k", sample_rate=24000):
         RuntimeError: If the ffmpeg conversion fails
     """
     # Create a temporary file with .ogg extension
-    temp_file = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
+    # Next to the input, not /tmp: the bridge runs in another container and only shares the store volume
+    temp_file = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False, dir=os.path.dirname(os.path.abspath(input_file)))
     temp_file.close()
     
     try:
